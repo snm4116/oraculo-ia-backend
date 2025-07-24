@@ -33,9 +33,9 @@ app = FastAPI(
 # Le decimos explícitamente al backend que confíe en estas direcciones.
 origins = [
     "http://localhost:3000",
-    "https://legendary-space-bassoon-g4pgjxg59ppqfg9q-3000.app.github.dev", # Tu frontend de Codespaces
-    "https://oraculo-ia-frontend.vercel.app", # Tu frontend de Vercel
-    # Si Vercel te da otras URLs de vista previa, también se pueden añadir aquí.
+    "https://legendary-space-bassoon-g4pgjxg59ppqfg9q-3000.app.github.dev",
+    "https://oraculo-ia-frontend.vercel.app", # La URL principal de Vercel
+    # Añade aquí cualquier otra URL de vista previa que Vercel te dé
 ]
 
 app.add_middleware(
