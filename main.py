@@ -1,26 +1,26 @@
 # main.py
 import os
 import httpx
+import google.generativeai as genai
 from fastapi import FastAPI, HTTPException
 from dotenv import load_dotenv
 from typing import List
 
-# Importa el middleware de CORS
 from fastapi.middleware.cors import CORSMiddleware
+from schemas import Game, GameAnalysis
 
-# Importa los modelos que acabamos de crear
-from schemas import Game
-
-# Carga las variables de entorno desde un archivo .env
 load_dotenv()
 
 # --- Configuración Segura ---
-API_KEY = os.getenv("RAPIDAPI_KEY")
-API_HOST = os.getenv("RAPIDAPI_HOST")
-API_URL = f"https://{API_HOST}/games"
+ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-if not API_KEY or not API_HOST:
-    raise RuntimeError("Las variables de entorno RAPIDAPI_KEY y RAPIDAPI_HOST deben estar definidas.")
+if not ODDS_API_KEY:
+    raise RuntimeError("THE_ODDS_API_KEY debe estar definida.")
+if not GEMINI_API_KEY:
+    raise RuntimeError("GEMINI_API_KEY debe estar definida.")
+
+genai.configure(api_key=GEMINI_API_KEY)
 
 app = FastAPI(
     title="El Oráculo IA API",
@@ -30,81 +30,94 @@ app = FastAPI(
 
 # --- Configuración de CORS ---
 # Lista de orígenes permitidos.
-# Le decimos explícitamente al backend que confíe en estas direcciones.
 origins = [
     "http://localhost:3000",
-    "https://legendary-space-bassoon-g4pgjxg59ppqfg9q-3000.app.github.dev",
-    "https://oraculo-ia-frontend.vercel.app", # La URL principal de Vercel
-    # Añade aquí cualquier otra URL de vista previa que Vercel te dé
+    "https://legendary-space-bassoon-g4pgjxg59ppqfg9q-3000.app.github.dev", # Tu frontend de Codespaces
+    "https://oraculo-ia-frontend.vercel.app", # Tu frontend de Vercel
+    # Si Vercel te da otras URLs de vista previa, también se pueden añadir aquí.
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins, # Usamos nuestra lista específica en lugar de "*"
+    allow_origins=origins, # Usamos nuestra lista específica
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# --- Capa de Servicio / Funciones de Ayuda ---
+
+async def _fetch_games_from_odds_api():
+    """
+    Función interna que llama a The Odds API para obtener los partidos de la NFL.
+    """
+    API_URL = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/events"
+    params = {
+        "apiKey": ODDS_API_KEY,
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            # The Odds API devuelve los próximos 8 días de eventos
+            response = await client.get(API_URL, params=params)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=f"Error al contactar The Odds API: {e.response.text}")
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=503, detail=f"Error de conexión con The Odds API: {e}")
+
+async def get_game_by_id(game_id: str):
+    """
+    Función de ayuda para obtener los datos de un solo partido por su ID.
+    """
+    all_games = await _fetch_games_from_odds_api()
+    for game in all_games:
+        if game['id'] == game_id:
+            return game
+    return None
+
 # --- Endpoints de la API ---
 
 @app.get("/")
 def read_root():
-    """
-    Endpoint de bienvenida.
-    """
     return {"message": "Bienvenido al motor de El Oráculo IA."}
 
-
 @app.get("/games", response_model=List[Game])
-async def get_games(season: int = 2023, league: int = 1):
+async def get_games():
     """
-    Obtiene la lista de partidos de la NFL y la transforma para que coincida
-    con nuestro modelo de datos interno.
+    Endpoint público para obtener la lista de partidos de The Odds API.
     """
-    headers = {
-        "x-rapidapi-key": API_KEY,
-        "x-rapidapi-host": API_HOST
-    }
-    params = {
-        "league": str(league),
-        "season": str(season)
-    }
+    return await _fetch_games_from_odds_api()
 
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(API_URL, headers=headers, params=params)
-            response.raise_for_status()
-            
-            api_data = response.json()
-            raw_games = api_data.get("response", [])
+@app.get("/predict/{game_id}", response_model=GameAnalysis)
+async def predict_game(game_id: str):
+    """
+    Genera un análisis y predicción para un partido específico usando Gemini.
+    """
+    game_data = await get_game_by_id(game_id)
+    if not game_data:
+        raise HTTPException(status_code=404, detail=f"Partido con ID {game_id} no encontrado.")
 
-            # --- CAPA DE TRADUCCIÓN ---
-            # Transformamos la respuesta de la API a nuestra estructura deseada (Game)
-            formatted_games = []
-            for raw_game in raw_games:
-                game_details = raw_game.get("game", {})
-                game_date_info = game_details.get("date", {})
-                
-                formatted_game = {
-                    "id": game_details.get("id"),
-                    "date": game_date_info.get("date"),
-                    "time": game_date_info.get("time"),
-                    "timezone": game_date_info.get("timezone"),
-                    "status": game_details.get("status"),
-                    "teams": raw_game.get("teams")
-                }
-                formatted_games.append(formatted_game)
-            
-            return formatted_games
+    team_home = game_data['home_team']
+    team_away = game_data['away_team']
 
-        except httpx.HTTPStatusError as e:
-            raise HTTPException(
-                status_code=e.response.status_code, 
-                detail=f"Error al contactar la API de deportes: {e.response.text}"
-            )
-        except httpx.RequestError as e:
-            raise HTTPException(
-                status_code=503, 
-                detail=f"Error de conexión con la API de deportes: {e}"
-            )
+    prompt = f"""
+    Actúa como un analista experto en deportes de la NFL. Tu tarea es analizar el próximo partido entre {team_away} y {team_home}.
+    Proporciona un análisis conciso pero experto que cubra los siguientes puntos:
+    1.  Un resumen general del enfrentamiento.
+    2.  De 3 a 5 factores o estadísticas clave que serán decisivos en el partido. Para cada factor, explica brevemente tu razonamiento.
+    3.  Una predicción final clara, incluyendo el equipo ganador, un marcador final estimado y un nivel de confianza (de 0.0 a 1.0) en tu predicción.
+    Basa tu análisis en el conocimiento general de la NFL, el rendimiento reciente de los equipos, enfrentamientos históricos y cualquier otro dato relevante que consideres.
+    """
+
+    try:
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            tools=[GameAnalysis] 
+        )
+        response = await model.generate_content_async(prompt, tool_config={'function_calling_config': 'ANY'})
+        analysis = response.candidates[0].content.parts[0].function_call.args
+        return analysis
+    except Exception as e:
+        print(f"Error al llamar a la API de Gemini: {e}")
+        raise HTTPException(status_code=500, detail="Error al generar el análisis de la IA.")
