@@ -33,13 +33,17 @@ app = FastAPI(
 origins = [
     "http://localhost:3000",
     "https://legendary-space-bassoon-g4pgjxg59ppqfg9q-3000.app.github.dev", # Tu frontend de Codespaces
-    "https://oraculo-ia-frontend.vercel.app", # Tu frontend de Vercel
-    # Si Vercel te da otras URLs de vista previa, también se pueden añadir aquí.
+    "https://oraculo-ia-frontend.vercel.app", # Tu frontend de Vercel principal
+    # Vercel crea URLs únicas para cada despliegue de vista previa,
+    # permitir cualquier subdominio de vercel.app es una buena práctica en desarrollo.
+    # En una producción más estricta, se añadirían las URLs específicas.
+    "*.vercel.app" 
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins, # Usamos nuestra lista específica
+    allow_origins=origins,
+    allow_origin_regex='https://.*\.vercel\.app', # Permite subdominios de Vercel
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -57,7 +61,6 @@ async def _fetch_games_from_odds_api():
     }
     async with httpx.AsyncClient() as client:
         try:
-            # The Odds API devuelve los próximos 8 días de eventos
             response = await client.get(API_URL, params=params)
             response.raise_for_status()
             return response.json()
