@@ -29,23 +29,17 @@ app = FastAPI(
 )
 
 # --- Configuración de CORS ---
-# Lista de orígenes permitidos.
 origins = [
     "http://localhost:3000",
     "https://legendary-space-bassoon-g4pgjxg59ppqfg9q-3000.app.github.dev",
     "https://oraculo-ia-frontend.vercel.app",
-    "https://oraculo-ia-frontend-n1shnmncy-samuels-projects-97aaae46.vercel.app" # <-- Añade esta
-], # Tu frontend de Vercel principal
-    # Vercel crea URLs únicas para cada despliegue de vista previa,
-    # permitir cualquier subdominio de vercel.app es una buena práctica en desarrollo.
-    # En una producción más estricta, se añadirían las URLs específicas.
-    "*.vercel.app" 
+    "https://oraculo-ia-frontend-git-main-samuels-projects-97aaae46.vercel.app",
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_origin_regex='https://.*\.vercel\.app', # Permite subdominios de Vercel
+    allow_origin_regex='https://oraculo-ia-frontend-.*-samuels-projects-97aaae46\\.vercel\\.app',
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
