@@ -35,17 +35,16 @@ app = FastAPI(
 )
 
 # --- Configuración de CORS ---
-# Lista de orígenes permitidos.
 origins = [
     "http://localhost:3000",
-    "https://legendary-space-bassoon-g4pgjxg59ppqfg9q-3000.app.github.dev", # Tu frontend de Codespaces
-    "https://oraculo-ia-frontend.vercel.app", # Tu frontend de Vercel principal
+    "https://legendary-space-bassoon-g4pgjxg59ppqfg9q-3000.app.github.dev",
+    "https://oraculo-ia-frontend.vercel.app",
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_origin_regex='https://oraculo-ia-frontend-.*-samuels-projects-97aaae46\\.vercel\\.app', # Permite subdominios de Vercel
+    allow_origin_regex='https://oraculo-ia-frontend-.*-samuels-projects-97aaae46\\.vercel\\.app',
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
