@@ -131,11 +131,26 @@ async def predict_game(game_id: str, db: Session = Depends(get_db)):
 
     prompt = f"Actúa como un analista experto en deportes de la NFL. Analiza el próximo partido entre {team_away} y {team_home} y proporciona un análisis detallado..." # Prompt acortado
 
-    try:
-        model = genai.GenerativeModel(model_name="gemini-1.5-flash", tools=[GameAnalysis])
-        response = await model.generate_content_async(prompt, tool_config={'function_calling_config': 'ANY'})
-        analysis = response.candidates[0].content.parts[0].function_call.args
-        return analysis
-    except Exception as e:
-        print(f"Error al llamar a la API de Gemini: {e}")
-        raise HTTPException(status_code=500, detail="Error al generar el análisis de la IA.")
+try:
+    model = genai.GenerativeModel(model_name="gemini-1.5-flash", tools=[GameAnalysis])
+    response = await model.generate_content_async(prompt, tool_config={'function_calling_config': 'ANY'})
+
+    # --- NUEVO CÓDIGO ROBUSTO ---
+    # Revisa si la IA devolvió una llamada a la función
+    if response.candidates and response.candidates[0].content.parts and response.candidates[0].content.parts[0].function_call:
+        analysis_args = response.candidates[0].content.parts[0].function_call.args
+
+        # Valida que todos los campos esperados estén presentes
+        if all(key in analysis_args for key in ["predicted_winner", "predicted_score", "confidence_level", "analysis_summary"]):
+             return analysis_args
+
+    # Si no hay function_call o faltan datos, devuelve un error controlado
+    print("-> [ERROR] La respuesta de Gemini no tuvo el formato esperado.")
+    raise HTTPException(status_code=500, detail="La IA no pudo generar un análisis estructurado. Inténtalo de nuevo.")
+
+except Exception as e:
+    print(f"Error al llamar a la API de Gemini o procesar su respuesta: {e}")
+    # Si ya es un error HTTP, relánzalo. Si no, crea uno nuevo.
+    if isinstance(e, HTTPException):
+        raise e
+    raise HTTPException(status_code=500, detail="Error interno al generar el análisis de la IA.")
