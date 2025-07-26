@@ -4,3 +4,10 @@ uvicorn[standard]
 httpx
 python-dotenv
 google-generativeai
+sqlalchemy
+psycopg2-binary
+alembic
+
+# Nuevas librerías para seguridad y autenticación
+passlib[bcrypt]
+python-jose[cryptography]

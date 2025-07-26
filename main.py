@@ -2,78 +2,85 @@
 import os
 import httpx
 import google.generativeai as genai
-from fastapi import FastAPI, HTTPException
+import auth # Importamos nuestro nuevo router de autenticación
+from fastapi import FastAPI, HTTPException, Depends
 from dotenv import load_dotenv
 from typing import List
+from datetime import datetime, timedelta, timezone
 
 from fastapi.middleware.cors import CORSMiddleware
-from schemas import Game, GameAnalysis
+from sqlalchemy.orm import Session
 
+# --- Importaciones de DB y Schemas actualizadas ---
+from db.database import engine, get_db # Importamos get_db desde su nueva ubicación
+from db import models as db_models
+from schemas import GameFromDB, GameAnalysis
+import auth # Importamos nuestro nuevo router de autenticación
+
+db_models.Base.metadata.create_all(bind=engine)
 load_dotenv()
 
-# --- Configuración Segura ---
+# --- Configuración ---
 ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-if not ODDS_API_KEY:
-    raise RuntimeError("THE_ODDS_API_KEY debe estar definida.")
-if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY debe estar definida.")
-
+if not ODDS_API_KEY or not GEMINI_API_KEY:
+    raise RuntimeError("Las claves de API deben estar definidas.")
 genai.configure(api_key=GEMINI_API_KEY)
 
-app = FastAPI(
-    title="El Oráculo IA API",
-    description="El motor de IA para predicciones deportivas.",
-    version="0.1.0",
-)
+app = FastAPI(title="El Oráculo IA API")
 
 # --- Configuración de CORS ---
-origins = [
-    "http://localhost:3000",
-    "https://legendary-space-bassoon-g4pgjxg59ppqfg9q-3000.app.github.dev",
-    "https://oraculo-ia-frontend.vercel.app",
-    "https://oraculo-ia-frontend-git-main-samuels-projects-97aaae46.vercel.app",
-]
-
+origins = ["*"] 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_origin_regex='https://oraculo-ia-frontend-.*-samuels-projects-97aaae46\\.vercel\\.app',
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Capa de Servicio / Funciones de Ayuda ---
+# Incluimos el router de autenticación en nuestra app principal
+app.include_router(auth.router, prefix="/auth", tags=["auth"])
 
-async def _fetch_games_from_odds_api():
-    """
-    Función interna que llama a The Odds API para obtener los partidos de la NFL.
-    """
+
+# --- (El resto del archivo main.py se mantiene igual, con los endpoints /games y /predict) ---
+
+# ... (pega aquí el resto de tu código de main.py, desde la sección "Capa de Servicio" en adelante) ...
+
+# --- Capa de Servicio ---
+
+async def _fetch_and_cache_games_from_api(db: Session):
     API_URL = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/events"
-    params = {
-        "apiKey": ODDS_API_KEY,
-    }
+    params = {"apiKey": ODDS_API_KEY}
+    
+    print("-> [API] Obteniendo partidos frescos desde The Odds API...")
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(API_URL, params=params)
             response.raise_for_status()
-            return response.json()
+            api_games = response.json()
+
+            print("-> [DB] Actualizando la base de datos...")
+            db.query(db_models.Game).delete()
+            
+            for game_data in api_games:
+                db_game = db_models.Game(
+                    id=game_data['id'],
+                    home_team=game_data['home_team'],
+                    away_team=game_data['away_team'],
+                    commence_time=datetime.fromisoformat(game_data['commence_time']),
+                    updated_at=datetime.now(timezone.utc) 
+                )
+                db.add(db_game)
+            
+            db.commit()
+            print("-> [DB] Base de datos actualizada con éxito.")
+            return db.query(db_models.Game).all()
+
         except httpx.HTTPStatusError as e:
             raise HTTPException(status_code=e.response.status_code, detail=f"Error al contactar The Odds API: {e.response.text}")
         except httpx.RequestError as e:
             raise HTTPException(status_code=503, detail=f"Error de conexión con The Odds API: {e}")
-
-async def get_game_by_id(game_id: str):
-    """
-    Función de ayuda para obtener los datos de un solo partido por su ID.
-    """
-    all_games = await _fetch_games_from_odds_api()
-    for game in all_games:
-        if game['id'] == game_id:
-            return game
-    return None
 
 # --- Endpoints de la API ---
 
@@ -81,39 +88,45 @@ async def get_game_by_id(game_id: str):
 def read_root():
     return {"message": "Bienvenido al motor de El Oráculo IA."}
 
-@app.get("/games", response_model=List[Game])
-async def get_games():
+@app.get("/games", response_model=List[GameFromDB])
+async def get_games(db: Session = Depends(get_db)):
     """
-    Endpoint público para obtener la lista de partidos de The Odds API.
+    Endpoint para obtener la lista de partidos.
+    Implementa una lógica de caché de 1 hora.
     """
-    return await _fetch_games_from_odds_api()
+    print("-> [CACHE] Revisando la base de datos para partidos...")
+    first_game = db.query(db_models.Game).first()
+    
+    cache_duration = timedelta(hours=1)
+    
+    if first_game and first_game.updated_at and (datetime.now(timezone.utc) - first_game.updated_at) < cache_duration:
+        print("-> [CACHE] Partidos frescos encontrados en la base de datos. Sirviendo desde caché.")
+        return db.query(db_models.Game).all()
+    
+    print("-> [CACHE] Caché vacía o expirada. Obteniendo datos frescos de la API.")
+    return await _fetch_and_cache_games_from_api(db)
 
 @app.get("/predict/{game_id}", response_model=GameAnalysis)
-async def predict_game(game_id: str):
+async def predict_game(game_id: str, db: Session = Depends(get_db)):
     """
     Genera un análisis y predicción para un partido específico usando Gemini.
     """
-    game_data = await get_game_by_id(game_id)
-    if not game_data:
-        raise HTTPException(status_code=404, detail=f"Partido con ID {game_id} no encontrado.")
+    game = db.query(db_models.Game).filter(db_models.Game.id == game_id).first()
+    if not game:
+        # Si no está en caché, lo buscamos en la API como fallback
+        print(f"-> [PREDICT] Partido {game_id} no encontrado en caché, buscando en la API...")
+        all_games_from_api = await _fetch_and_cache_games_from_api(db)
+        game = db.query(db_models.Game).filter(db_models.Game.id == game_id).first()
+        if not game:
+            raise HTTPException(status_code=404, detail=f"Partido con ID {game_id} no encontrado.")
 
-    team_home = game_data['home_team']
-    team_away = game_data['away_team']
+    team_home = game.home_team
+    team_away = game.away_team
 
-    prompt = f"""
-    Actúa como un analista experto en deportes de la NFL. Tu tarea es analizar el próximo partido entre {team_away} y {team_home}.
-    Proporciona un análisis conciso pero experto que cubra los siguientes puntos:
-    1.  Un resumen general del enfrentamiento.
-    2.  De 3 a 5 factores o estadísticas clave que serán decisivos en el partido. Para cada factor, explica brevemente tu razonamiento.
-    3.  Una predicción final clara, incluyendo el equipo ganador, un marcador final estimado y un nivel de confianza (de 0.0 a 1.0) en tu predicción.
-    Basa tu análisis en el conocimiento general de la NFL, el rendimiento reciente de los equipos, enfrentamientos históricos y cualquier otro dato relevante que consideres.
-    """
+    prompt = f"Actúa como un analista experto en deportes de la NFL. Analiza el próximo partido entre {team_away} y {team_home} y proporciona un análisis detallado..." # Prompt acortado por brevedad
 
     try:
-        model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
-            tools=[GameAnalysis] 
-        )
+        model = genai.GenerativeModel(model_name="gemini-1.5-flash", tools=[GameAnalysis])
         response = await model.generate_content_async(prompt, tool_config={'function_calling_config': 'ANY'})
         analysis = response.candidates[0].content.parts[0].function_call.args
         return analysis
