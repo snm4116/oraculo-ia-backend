@@ -2,7 +2,6 @@
 import os
 import httpx
 import google.generativeai as genai
-import auth # Importamos nuestro nuevo router de autenticación
 from fastapi import FastAPI, HTTPException, Depends
 from dotenv import load_dotenv
 from typing import List
@@ -11,29 +10,42 @@ from datetime import datetime, timedelta, timezone
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
-# --- Importaciones de DB y Schemas actualizadas ---
-from db.database import engine, get_db # Importamos get_db desde su nueva ubicación
+# Importaciones de DB, Schemas y Auth
+from db.database import engine, get_db
 from db import models as db_models
 from schemas import GameFromDB, GameAnalysis
-import auth # Importamos nuestro nuevo router de autenticación
+import auth
 
 db_models.Base.metadata.create_all(bind=engine)
 load_dotenv()
 
-# --- Configuración ---
+# --- Configuración Segura ---
 ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
 if not ODDS_API_KEY or not GEMINI_API_KEY:
-    raise RuntimeError("Las claves de API deben estar definidas.")
+    raise RuntimeError("THE_ODDS_API_KEY y GEMINI_API_KEY deben estar definidas.")
+
 genai.configure(api_key=GEMINI_API_KEY)
 
-app = FastAPI(title="El Oráculo IA API")
+app = FastAPI(
+    title="El Oráculo IA API",
+    description="El motor de IA para predicciones deportivas.",
+    version="0.1.0",
+)
 
 # --- Configuración de CORS ---
-origins = ["*"] 
+# Lista de orígenes permitidos.
+origins = [
+    "http://localhost:3000",
+    "https://legendary-space-bassoon-g4pgjxg59ppqfg9q-3000.app.github.dev", # Tu frontend de Codespaces
+    "https://oraculo-ia-frontend.vercel.app", # Tu frontend de Vercel principal
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex='https://oraculo-ia-frontend-.*-samuels-projects-97aaae46\\.vercel\\.app', # Permite subdominios de Vercel
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -43,11 +55,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 
 
-# --- (El resto del archivo main.py se mantiene igual, con los endpoints /games y /predict) ---
-
-# ... (pega aquí el resto de tu código de main.py, desde la sección "Capa de Servicio" en adelante) ...
-
-# --- Capa de Servicio ---
+# --- Capa de Servicio / Funciones de Ayuda ---
 
 async def _fetch_and_cache_games_from_api(db: Session):
     API_URL = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/events"
@@ -113,9 +121,8 @@ async def predict_game(game_id: str, db: Session = Depends(get_db)):
     """
     game = db.query(db_models.Game).filter(db_models.Game.id == game_id).first()
     if not game:
-        # Si no está en caché, lo buscamos en la API como fallback
         print(f"-> [PREDICT] Partido {game_id} no encontrado en caché, buscando en la API...")
-        all_games_from_api = await _fetch_and_cache_games_from_api(db)
+        await _fetch_and_cache_games_from_api(db)
         game = db.query(db_models.Game).filter(db_models.Game.id == game_id).first()
         if not game:
             raise HTTPException(status_code=404, detail=f"Partido con ID {game_id} no encontrado.")
@@ -123,7 +130,7 @@ async def predict_game(game_id: str, db: Session = Depends(get_db)):
     team_home = game.home_team
     team_away = game.away_team
 
-    prompt = f"Actúa como un analista experto en deportes de la NFL. Analiza el próximo partido entre {team_away} y {team_home} y proporciona un análisis detallado..." # Prompt acortado por brevedad
+    prompt = f"Actúa como un analista experto en deportes de la NFL. Analiza el próximo partido entre {team_away} y {team_home} y proporciona un análisis detallado..." # Prompt acortado
 
     try:
         model = genai.GenerativeModel(model_name="gemini-1.5-flash", tools=[GameAnalysis])
