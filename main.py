@@ -75,7 +75,7 @@ async def _fetch_and_cache_games_from_api(db: Session):
                     id=game_data['id'],
                     home_team=game_data['home_team'],
                     away_team=game_data['away_team'],
-                    commence_time=datetime.fromisoformat(game_data['commence_time']),
+                    commence_time=datetime.fromisoformat(game_data['commence_time'].replace("Z", "+00:00")),
                     updated_at=datetime.now(timezone.utc) 
                 )
                 db.add(db_game)
@@ -97,16 +97,13 @@ def read_root():
 
 @app.get("/games", response_model=List[GameFromDB])
 async def get_games(db: Session = Depends(get_db)):
-    """
-    Endpoint para obtener la lista de partidos.
-    Implementa una lógica de caché de 1 hora.
-    """
     print("-> [CACHE] Revisando la base de datos para partidos...")
     first_game = db.query(db_models.Game).first()
     
     cache_duration = timedelta(hours=1)
     
-    if first_game and first_game.updated_at and (datetime.now(timezone.utc) - first_game.updated_at) < cache_duration:
+    now_utc = datetime.now(timezone.utc)
+    if first_game and first_game.updated_at and (now_utc - first_game.updated_at) < cache_duration:
         print("-> [CACHE] Partidos frescos encontrados en la base de datos. Sirviendo desde caché.")
         return db.query(db_models.Game).all()
     
@@ -115,9 +112,6 @@ async def get_games(db: Session = Depends(get_db)):
 
 @app.get("/predict/{game_id}", response_model=GameAnalysis)
 async def predict_game(game_id: str, db: Session = Depends(get_db)):
-    """
-    Genera un análisis y predicción para un partido específico usando Gemini.
-    """
     game = db.query(db_models.Game).filter(db_models.Game.id == game_id).first()
     if not game:
         print(f"-> [PREDICT] Partido {game_id} no encontrado en caché, buscando en la API...")
@@ -129,28 +123,43 @@ async def predict_game(game_id: str, db: Session = Depends(get_db)):
     team_home = game.home_team
     team_away = game.away_team
 
-    prompt = f"Actúa como un analista experto en deportes de la NFL. Analiza el próximo partido entre {team_away} y {team_home} y proporciona un análisis detallado..." # Prompt acortado
+    # --- INICIO DEL PROMPT MAESTRO ---
+    prompt = f"""
+    Actúa como El Oráculo, un analista experto en deportes de la NFL con un conocimiento enciclopédico de equipos, jugadores, estadísticas y estrategias. Tu tono es sabio, confiado y analítico.
 
-try:
-    model = genai.GenerativeModel(model_name="gemini-1.5-flash", tools=[GameAnalysis])
-    response = await model.generate_content_async(prompt, tool_config={'function_calling_config': 'ANY'})
+    Analiza el próximo partido de la NFL entre los {team_away} (visitantes) y los {team_home} (locales).
 
-    # --- NUEVO CÓDIGO ROBUSTO ---
-    # Revisa si la IA devolvió una llamada a la función
-    if response.candidates and response.candidates[0].content.parts and response.candidates[0].content.parts[0].function_call:
-        analysis_args = response.candidates[0].content.parts[0].function_call.args
+    Realiza un análisis profundo que cubra los siguientes puntos clave:
+    1.  **Análisis Ofensivo y Defensivo:** Evalúa las fortalezas y debilidades de la ofensiva y defensiva de cada equipo. Menciona jugadores clave (Quarterback, receptores principales, corredores, línea defensiva, etc.).
+    2.  **Enfrentamientos Clave (Matchups):** Identifica uno o dos enfrentamientos individuales o de unidades que serán decisivos para el resultado del partido (por ejemplo, el receptor estrella de un equipo contra el esquinero principal del otro).
+    3.  **Estado de Forma y Lesiones:** Considera el rendimiento reciente de ambos equipos (racha de victorias/derrotas) y el impacto de cualquier lesión importante en jugadores clave.
+    4.  **Veredicto y Resumen:** Basado en todo tu análisis, proporciona un resumen conciso que justifique tu predicción.
 
-        # Valida que todos los campos esperados estén presentes
-        if all(key in analysis_args for key in ["predicted_winner", "predicted_score", "confidence_level", "analysis_summary"]):
-             return analysis_args
+    Después de tu análisis, utiliza la herramienta 'GameAnalysis' para estructurar tu conclusión final con los siguientes elementos:
+    - **predicted_winner:** El nombre completo del equipo que crees que ganará.
+    - **predicted_score:** Tu predicción del marcador final (ej. "27-24").
+    - **confidence_level:** Un número entre 0.0 y 1.0 que represente tu nivel de confianza en la predicción.
+    - **analysis_summary:** El texto de tu veredicto y resumen.
+    """
+    # --- FIN DEL PROMPT MAESTRO ---
 
-    # Si no hay function_call o faltan datos, devuelve un error controlado
-    print("-> [ERROR] La respuesta de Gemini no tuvo el formato esperado.")
-    raise HTTPException(status_code=500, detail="La IA no pudo generar un análisis estructurado. Inténtalo de nuevo.")
+    # --- INICIO DEL BLOQUE TRY/EXCEPT CORREGIDO ---
+    try:
+        model = genai.GenerativeModel(model_name="gemini-1.5-flash", tools=[GameAnalysis])
+        response = await model.generate_content_async(prompt, tool_config={'function_calling_config': 'ANY'})
+        
+        if response.candidates and response.candidates[0].content.parts and response.candidates[0].content.parts[0].function_call:
+            analysis_args = response.candidates[0].content.parts[0].function_call.args
+            
+            if all(key in analysis_args for key in ["predicted_winner", "predicted_score", "confidence_level", "analysis_summary"]):
+                 return analysis_args
 
-except Exception as e:
-    print(f"Error al llamar a la API de Gemini o procesar su respuesta: {e}")
-    # Si ya es un error HTTP, relánzalo. Si no, crea uno nuevo.
-    if isinstance(e, HTTPException):
-        raise e
-    raise HTTPException(status_code=500, detail="Error interno al generar el análisis de la IA.")
+        print("-> [ERROR] La respuesta de Gemini no tuvo el formato esperado.")
+        raise HTTPException(status_code=500, detail="La IA no pudo generar un análisis estructurado. Inténtalo de nuevo.")
+
+    except Exception as e:
+        print(f"Error al llamar a la API de Gemini o procesar su respuesta: {e}")
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail="Error interno al generar el análisis de la IA.")
+    # --- FIN DEL BLOQUE TRY/EXCEPT CORREGIDO ---
