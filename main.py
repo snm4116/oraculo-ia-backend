@@ -18,26 +18,17 @@ import auth
 db_models.Base.metadata.create_all(bind=engine)
 load_dotenv()
 
-# --- Configuración Segura ---
 ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not ODDS_API_KEY or not GEMINI_API_KEY:
-    raise RuntimeError("THE_ODDS_API_KEY y GEMINI_API_KEY deben estar definidas.")
+    raise RuntimeError("Las claves de API deben estar definidas.")
 
 genai.configure(api_key=GEMINI_API_KEY)
 
-app = FastAPI(
-    title="El Oráculo IA API",
-    description="El motor de IA para predicciones deportivas.",
-    version="1.1.0", # Version incrementada
-)
+app = FastAPI(title="El Oráculo IA API", version="2.0.0")
 
-# --- Configuración de CORS ---
-origins = [
-    "http://localhost:3000",
-    "https://oraculo-ia-frontend.vercel.app",
-]
+origins = ["http://localhost:3000", "https://oraculo-ia-frontend.vercel.app"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -49,43 +40,30 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 
-# --- Lógica de la API ---
-
 async def _fetch_and_cache_games_from_api(db: Session):
     API_URL = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/events"
     params = {"apiKey": ODDS_API_KEY}
-    print("-> [API] Obteniendo partidos frescos...")
     async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(API_URL, params=params)
-            response.raise_for_status()
-            api_games = response.json()
-            print("-> [DB] Actualizando la base de datos...")
-            db.query(db_models.Game).delete()
-            for game_data in api_games:
-                db_game = db_models.Game(
-                    id=game_data['id'],
-                    home_team=game_data['home_team'],
-                    away_team=game_data['away_team'],
-                    commence_time=datetime.fromisoformat(game_data['commence_time'].replace("Z", "+00:00")),
-                    updated_at=datetime.now(timezone.utc)
-                )
-                db.add(db_game)
-            db.commit()
-            print("-> [DB] Base de datos actualizada.")
-            return db.query(db_models.Game).all()
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error interno al procesar los partidos: {e}")
-
-@app.get("/")
-def read_root():
-    return {"message": "Bienvenido al motor de El Oráculo IA."}
+        response = await client.get(API_URL, params=params)
+        response.raise_for_status()
+        api_games = response.json()
+        db.query(db_models.Game).delete()
+        for game_data in api_games:
+            db_game = db_models.Game(
+                id=game_data['id'],
+                home_team=game_data['home_team'],
+                away_team=game_data['away_team'],
+                commence_time=datetime.fromisoformat(game_data['commence_time'].replace("Z", "+00:00")),
+                updated_at=datetime.now(timezone.utc)
+            )
+            db.add(db_game)
+        db.commit()
+        return db.query(db_models.Game).all()
 
 @app.get("/games", response_model=List[GameFromDB])
 async def get_games(db: Session = Depends(get_db)):
     first_game = db.query(db_models.Game).first()
-    cache_duration = timedelta(hours=1)
-    if first_game and first_game.updated_at and (datetime.now(timezone.utc) - first_game.updated_at) < cache_duration:
+    if first_game and first_game.updated_at and (datetime.now(timezone.utc) - first_game.updated_at) < timedelta(hours=1):
         return db.query(db_models.Game).all()
     return await _fetch_and_cache_games_from_api(db)
 
@@ -97,25 +75,22 @@ async def predict_game(game_id: str, db: Session = Depends(get_db)):
 
     team_home = game.home_team
     team_away = game.away_team
-    
-    # --- IMPLEMENTACIÓN DEL PROMPT MAESTRO V3 ---
     current_year = datetime.now().year
+
+    # --- PROMPT MAESTRO V4: CADENA DE PENSAMIENTO ---
     prompt = f"""
-    Actúa como El Oráculo, un analista experto en deportes de la NFL con un conocimiento enciclopédico. El año actual es {current_year}. Basa todo tu análisis en las plantillas, estadísticas y estado de forma más recientes de los equipos para la temporada {current_year}. Ignora por completo las plantillas o situaciones de años anteriores.
+    Actúa como El Oráculo, un analista de élite de la NFL. El año actual es {current_year}. Tu análisis debe ser profundo, incisivo y basado en los datos más recientes.
 
-    Tu tarea es analizar en profundidad el próximo partido entre los {team_away} (visitantes) y los {team_home} (locales).
+    **Tarea:** Realiza un análisis para el partido entre {team_away} (visitantes) y {team_home} (locales).
 
-    Primero, realiza un análisis interno que cubra los siguientes puntos clave:
-    1.  **Análisis Ofensivo y Defensivo:** Evalúa las fortalezas y debilidades de la ofensiva y defensiva de cada equipo. Menciona jugadores clave (Quarterback, un receptor principal, un corredor, y un jugador defensivo destacado).
-    2.  **Enfrentamientos Clave (Matchups):** Identifica uno o dos enfrentamientos individuales o de unidades que serán decisivos para el resultado del partido.
-    3.  **Estado de Forma y Lesiones:** Considera el rendimiento reciente de ambos equipos y el impacto de cualquier lesión importante confirmada para el partido.
+    **Proceso de Análisis (Cadena de Pensamiento):**
+    1.  **Análisis Histórico (Pasado):** Primero, considera la rivalidad histórica y los resultados de enfrentamientos directos recientes. ¿Hay alguna tendencia psicológica o táctica?
+    2.  **Análisis de Forma Actual (Presente):** Luego, evalúa el rendimiento de ambos equipos en los últimos 3-4 partidos de la temporada {current_year}. Analiza sus fortalezas y debilidades ofensivas y defensivas, mencionando jugadores clave actuales. Considera el impacto de lesiones confirmadas.
+    3.  **Duelos Decisivos (Futuro en el Partido):** Finalmente, identifica 2 o 3 duelos específicos (ej. receptor estrella vs. esquinero top, línea ofensiva vs. línea defensiva) que determinarán el resultado del partido.
 
-    Finalmente, utiliza la herramienta 'GameAnalysis' para estructurar tu conclusión final. Debes rellenar TODOS los campos de la herramienta con la información de tu análisis:
-    - **summary**: Un resumen narrativo general de tu análisis, justificando tu predicción.
-    - **key_factors**: Una lista de 2 a 3 de los factores más importantes de tu análisis.
-    - **prediction**: Tu predicción final, incluyendo el ganador, el marcador exacto y tu nivel de confianza.
+    **Salida Final:**
+    Una vez completado tu análisis interno, usa la herramienta 'GameAnalysis' para estructurar tu conclusión. Rellena TODOS los campos con la mayor precisión posible.
     """
-    # --- FIN DEL PROMPT ---
 
     try:
         model = genai.GenerativeModel(model_name="gemini-1.5-flash", tools=[GameAnalysis])
@@ -123,7 +98,7 @@ async def predict_game(game_id: str, db: Session = Depends(get_db)):
         
         if response.candidates and response.candidates[0].content.parts and response.candidates[0].content.parts[0].function_call:
             analysis_args = response.candidates[0].content.parts[0].function_call.args
-            if all(key in analysis_args for key in ["summary", "key_factors", "prediction"]):
+            if all(key in analysis_args for key in ["historical_context", "current_form_analysis", "key_factors", "prediction"]):
                  return analysis_args
 
         raise HTTPException(status_code=500, detail="La IA no pudo generar un análisis estructurado.")
