@@ -4,7 +4,6 @@ from typing import List, Optional
 from datetime import datetime
 
 # --- Modelos para el Análisis de la IA (Respuesta de Gemini) ---
-# Estructura de la versión anterior que funcionaba bien.
 class KeyFactor(BaseModel):
     factor: str = Field(description="Un factor clave o estadística comparativa relevante para la predicción.")
     reasoning: str = Field(description="Una breve explicación de por qué este factor es importante para el partido.")

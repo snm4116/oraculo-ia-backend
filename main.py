@@ -37,7 +37,6 @@ app = FastAPI(
 origins = [
     "http://localhost:3000",
     "https://oraculo-ia-frontend.vercel.app",
-    "https://oraculo-ia-frontend-samuels-projects-97aaae46.vercel.app"
 ]
 
 app.add_middleware(
@@ -51,7 +50,6 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 
-# --- Lógica de Caché y API ---
 async def _fetch_and_cache_games_from_api(db: Session):
     API_URL = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/events"
     params = {"apiKey": ODDS_API_KEY}
@@ -85,7 +83,6 @@ async def _fetch_and_cache_games_from_api(db: Session):
         except httpx.RequestError as e:
             raise HTTPException(status_code=503, detail=f"Error de conexión con The Odds API: {e}")
 
-# --- Endpoints ---
 @app.get("/")
 def read_root():
     return {"message": "Bienvenido al motor de El Oráculo IA."}
