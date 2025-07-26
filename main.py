@@ -5,7 +5,7 @@ import google.generativeai as genai
 from fastapi import FastAPI, HTTPException, Depends
 from dotenv import load_dotenv
 from typing import List
-from datetime import datetime, timedelta, timezone # Asegúrate que datetime esté importado
+from datetime import datetime, timedelta, timezone
 
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -15,8 +15,24 @@ from db import models as db_models
 from schemas import GameFromDB, GameAnalysis
 import auth
 
-# ... (el resto de la configuración inicial se mantiene igual hasta el endpoint predict_game) ...
-# ... (omitiendo el código que no cambia por brevedad) ...
+db_models.Base.metadata.create_all(bind=engine)
+load_dotenv()
+
+# --- Configuración Segura ---
+ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+if not ODDS_API_KEY or not GEMINI_API_KEY:
+    raise RuntimeError("THE_ODDS_API_KEY y GEMINI_API_KEY deben estar definidas.")
+
+genai.configure(api_key=GEMINI_API_KEY)
+
+# --- CREACIÓN DE LA APLICACIÓN (LA LÍNEA QUE FALTABA) ---
+app = FastAPI(
+    title="El Oráculo IA API",
+    description="El motor de IA para predicciones deportivas.",
+    version="0.1.0",
+)
 
 # --- Configuración de CORS ---
 origins = [
@@ -34,6 +50,8 @@ app.add_middleware(
 )
 
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
+
+# --- FUNCIONES Y ENDPOINTS ---
 
 async def _fetch_and_cache_games_from_api(db: Session):
     API_URL = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/events"
@@ -85,7 +103,6 @@ async def get_games(db: Session = Depends(get_db)):
     print("-> [CACHE] Caché expirada. Obteniendo datos frescos.")
     return await _fetch_and_cache_games_from_api(db)
 
-
 @app.get("/predict/{game_id}", response_model=GameAnalysis)
 async def predict_game(game_id: str, db: Session = Depends(get_db)):
     game = db.query(db_models.Game).filter(db_models.Game.id == game_id).first()
@@ -97,9 +114,8 @@ async def predict_game(game_id: str, db: Session = Depends(get_db)):
 
     team_home = game.home_team
     team_away = game.away_team
-    current_year = datetime.now().year # Obtenemos el año actual
+    current_year = datetime.now().year
 
-    # --- PROMPT MEJORADO CON ANCLAJE TEMPORAL ---
     prompt = f"""
     Actúa como un analista experto en deportes de la NFL. El año actual es {current_year}. Basa tu análisis en las plantillas y el estado de forma más recientes de los equipos.
 
