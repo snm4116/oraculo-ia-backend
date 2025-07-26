@@ -11,3 +11,5 @@ alembic
 # Nuevas librerías para seguridad y autenticación
 passlib[bcrypt]
 python-jose[cryptography]
+
+pydantic[email]

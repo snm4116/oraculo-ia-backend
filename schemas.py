@@ -1,5 +1,5 @@
 # schemas.py
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, ConfigDict
 from typing import List, Optional
 from datetime import datetime
 
@@ -15,9 +15,7 @@ class GameBase(BaseModel):
 
 class GameFromDB(GameBase):
     updated_at: datetime
-
-    class Config:
-        orm_mode = True # En Pydantic v2, se usa from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class GameAnalysis(BaseModel):
     predicted_winner: str
@@ -29,18 +27,14 @@ class GameAnalysis(BaseModel):
 # Schemas para Users y Autenticación
 # -------------------
 
-# Schema para la creación de un usuario (lo que se recibe en el endpoint de registro)
 class UserCreate(BaseModel):
     email: EmailStr
     password: str
 
-# Schema para leer un usuario desde la BD (nunca debe exponer la contraseña)
 class User(BaseModel):
     id: int
     email: EmailStr
-
-    class Config:
-        orm_mode = True # En Pydantic v2, se usa from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # -------------------
 # Schemas para Tokens (JWT)
